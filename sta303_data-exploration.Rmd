@@ -1,0 +1,366 @@
+---
+output:
+  pdf_document: default
+urlcolor: blue
+header-includes:    
+  - \usepackage{lastpage}
+  - \usepackage{fancyhdr}
+  - \pagestyle{fancy}
+  - \fancyhead[CO, CE]{Jiaqi Bi, 1003886609}
+  - \fancyfoot[CO, CE]{\thepage \ of \pageref{LastPage}}
+---
+
+
+
+```{r setup, message = FALSE, echo=FALSE}
+# Students: You probably shouldn't change any of the code in this chunk.
+
+# These are the packages you will need for this activity
+packages_needed <- c("tidyverse", "googledrive", "readxl", "janitor", 
+                     "lubridate", "opendatatoronto", "ggthemes")
+
+package.check <- lapply(
+  packages_needed,
+  FUN = function(x) {
+    if (!require(x, character.only = TRUE)) {
+      install.packages(x, dependencies = TRUE)
+    }
+  }
+)
+
+# Credit: package.check based on a helpful post from Vikram Baliga https://vbaliga.github.io/verify-that-r-packages-are-installed-and-loaded/
+
+```
+
+```{r message = FALSE, echo=FALSE}
+# Load tidyverse
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(opendatatoronto)
+library(ggthemes)
+
+# Set so that long lines in R will be wrapped:
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80), echo = TRUE)
+```
+
+
+```{r getdata, eval = FALSE, echo=FALSE}
+#Alternative Dataset provided after the update of online tracking was paused. 
+library(readxl)
+CityofToronto_COVID_19_Daily_Public_Reporting <- read_excel("CityofToronto_COVID-19_Daily_Public_Reporting.xlsx")
+View(CityofToronto_COVID_19_Daily_Public_Reporting)
+#Neighbourhood dataset after the update of online tracking was paused. 
+CityofToronto_COVID_19_NeighbourhoodData <- read_excel("CityofToronto_COVID-19_NeighbourhoodData.xlsx")
+View(CityofToronto_COVID_19_NeighbourhoodData)
+```
+
+
+
+
+```{r load_data, echo=FALSE}
+#####################################################################
+# Step two: Get the data neighbourhood data from Open Data Toronto. #
+#####################################################################
+
+nbhoods_shape_raw <- list_package_resources("neighbourhoods") %>% 
+  get_resource()
+
+saveRDS(nbhoods_shape_raw, "neighbourhood_shapefile.Rds")
+
+nbhood_profile <- search_packages("Neighbourhood Profile") %>%
+  list_package_resources() %>% 
+  filter(name == "neighbourhood-profiles-2016-csv") %>% 
+  get_resource()
+
+saveRDS(nbhood_profile, "neighbourhood_profile.Rds")
+
+######################################################
+# Step three: Load the COVID data from Toronto City. #
+######################################################
+
+# Saving the name of the file as an object and then using the object name in the
+# following code is a helpful practice. Why? If we change the name of the file 
+# being used, we'll only have to change it in one place. This helps us avoid 
+# 'human error'.
+
+daily_data <- "CityofToronto_COVID-19_Daily_Public_Reporting.xlsx"
+
+# Cases reported by date
+reported_raw <- read_excel(daily_data, sheet = 5) %>% 
+  clean_names()
+
+# Cases by outbreak type
+outbreak_raw <- read_excel(daily_data, sheet = 3) %>% 
+  clean_names()
+
+# When was this data updated?
+date_daily <- read_excel(daily_data, sheet = 1) %>% 
+  clean_names()
+
+# By neighbourhood
+neighbourood_data <- "CityofToronto_COVID-19_NeighbourhoodData.xlsx"
+
+# Cases reported by date
+nbhood_raw <- read_excel(neighbourood_data, sheet = 2) %>% 
+  clean_names()
+
+# Date the neighbourhood data was last updated
+date_nbhood <- read_excel(neighbourood_data, sheet = 1) %>% 
+  clean_names()
+
+#don't need these anymore
+rm(daily_data, neighbourood_data)
+
+#############################################################
+# Step four: Load the neighbourhood data from Toronto City. #
+#############################################################
+
+# Get neighbourhood profile data
+nbhood_profile <- readRDS("neighbourhood_profile.Rds")
+
+# Get shape data for mapping 
+nbhoods_shape_raw <- readRDS("neighbourhood_shapefile.Rds") %>% 
+  sf::st_as_sf() ## Makes sure shape info is in the most up to date format
+
+```
+
+Code last run `r Sys.Date()`.  
+Daily: `r date_daily[1,1]`.   
+Neighbourhood: `r date_nbhood[1,1]`. 
+
+# Task 1: Daily cases
+## Data wrangling
+
+```{r cases_dw}
+#Replace all NAs with 0 in all columns, capitalize to appropriate names
+reported <- reported_raw %>%
+  mutate_if(is.numeric, replace_na, replace=0) %>%
+  mutate(reported_date = date(reported_date)) %>%
+  rename(
+    Reported_Date = reported_date,
+    Recovered = recovered, 
+    Active = active, 
+    Deceased = deceased
+  ) %>%
+  pivot_longer(-c(Reported_Date),
+             names_to="Case", values_to="Count") %>%
+  mutate(Case = fct_relevel(Case, "Deceased", after = 3))
+
+```
+
+
+
+
+
+
+
+\newpage
+## Data visualization
+
+```{r cases_vis}
+# Task 1 Data Visualization
+reported %>%
+  ggplot(aes(x=Reported_Date, y=Count, fill = Case)) +
+  geom_bar(stat="identity") +
+  theme_minimal() +
+  labs(title="Cases reported by day in Toronto, Canada",
+       subtitle="Confirmed and probable cases",
+       x = "Date",
+       y = "Case count",
+       caption = str_c(
+         "Created by: Jiaqi Bi for STA303/1002, U of T\n",
+         "Source: Ontario Ministry of Health, Integrated Public Health Information System and CORES\n", 
+         date_daily[1,1])) +
+  scale_x_date(labels = scales::date_format("%d %b %y"), 
+               limits = c(date("2020-01-01"), Sys.Date())) +
+  scale_y_continuous(limits = c(0, 2000)) +
+  theme(legend.title = element_blank(), legend.position = c(0.15, 0.8)) +
+  scale_fill_manual(values = c("#003F5C", "#86BCB6", "#B9CA5D"))
+```
+
+\newpage
+# Task 2: Outbreak type
+## Data wrangling
+
+
+```{r outbreak_dw, message=FALSE}
+outbreak <- outbreak_raw %>%
+  mutate(episode_week = date(episode_week)) %>%
+  rename(
+    Outbreak_or_Sporadic = outbreak_or_sporadic,
+    Episode_Week = episode_week, 
+    Cases = cases
+  ) %>%
+  mutate(Outbreak_or_Sporadic = str_replace(Outbreak_or_Sporadic, "OB Associated",
+                                            "Outbreak associated")) %>%
+  mutate(Outbreak_or_Sporadic = fct_rev(Outbreak_or_Sporadic)) 
+
+create_total_cases <- summarise(group_by(outbreak, Episode_Week), 
+                               total_cases = sum(Cases))
+outbreak <- left_join(outbreak, create_total_cases) 
+```
+
+\newpage
+## Data visualization
+
+```{r outbreak_vis}
+outbreak %>%
+  ggplot(aes(x=Episode_Week, y=Cases, fill=Outbreak_or_Sporadic)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Cases by outbreak type and week in Toronto, Canada",
+       subtitle = "Confirmed and probable cases",
+       x = "Date", 
+       y = "Case count", 
+       caption =  str_c(
+         "Created by: Jiaqi Bi for STA303/1002, U of T\n",
+         "Source: Ontario Ministry of Health, Integrated Public Health Information System and CORES\n", 
+         date_daily[1,1])) +
+  scale_x_date(labels = scales::date_format("%d %b %y"), limits = c(date("2020-01-01"),
+                                                                    Sys.Date()+7)) +
+  scale_y_continuous(limits = c(0, max(outbreak$total_cases))) +
+  theme(legend.title = element_blank(), legend.position = c(0.15, 0.8)) +
+  scale_fill_manual(values = c("#86BCB6", "#B9CA5D"))
+  
+
+```
+
+\newpage
+# Task 3: Neighbourhoods
+## Data wrangling: part 1
+
+```{r nbhood_dw_1}
+income <- nbhood_profile %>%
+  filter(`_id` == 1143) %>%
+  pivot_longer(-c(`_id`, Category, Topic, `Data Source`, Characteristic), 
+               names_to="neighbourhood_name", values_to="percentage") %>%
+  select(-c(`_id`, Category, Topic, `Data Source`, Characteristic)) %>%
+  mutate(percentage = parse_number(percentage))
+
+```
+
+## Data wrangling: part 2
+
+```{r nbhood_dw_2}
+nbhoods_all <- nbhoods_shape_raw %>%
+  mutate(neighbourhood_name = str_remove(AREA_NAME, "\\s\\(\\d+\\)$")) %>%
+  mutate(neighbourhood_name = str_replace(neighbourhood_name, "St.James", "St. James")) %>%
+  mutate(neighbourhood_name = str_replace(neighbourhood_name, "Weston-Pellam", "Weston-Pelham")) %>%
+  full_join(nbhood_raw, by = "neighbourhood_name") %>%
+  full_join(income, by = "neighbourhood_name") %>%
+  select(-c(neighbourhood_id, case_count)) %>% 
+  filter(!is.na(rate_per_100_000_people)) %>%
+  rename(rate_per_100000 = rate_per_100_000_people)
+  
+```
+
+## Data wrangling: part 3
+
+```{r nbhood_dw_3}
+nbhoods_final <- nbhoods_all %>%
+  mutate(med_inc = median(percentage)) %>%
+  mutate(med_rate = median(rate_per_100000)) %>%
+  mutate(nbhood_type = case_when(
+    percentage >= med_inc & rate_per_100000 >= med_rate
+    ~ "Higher low income rate, higher case rate", 
+    percentage >= med_inc & rate_per_100000 < med_rate
+    ~ "Higher low income rate, lower case rate", 
+    percentage < med_inc & rate_per_100000 >= med_rate
+    ~ "Lower low income rate, higher case rate", 
+    percentage < med_inc & rate_per_100000 < med_rate
+    ~ "Lower low income rate, lower case rate"
+  ))
+           
+```
+
+\newpage
+## Data visualization
+
+```{r neighbourhood_graphs_1, fig.height=4}
+ggplot(data = nbhoods_final) +
+  geom_sf(aes(fill = percentage)) +
+  theme_map() +
+  theme(legend.position = "right") + 
+  scale_fill_gradient(name = "% low income", low = "darkgreen", high = "lightgrey") +
+  labs(title = "Percentage of 18 to 64 year olds living in a low income family", 
+       subtitle = "Neighbourhoods of Toronto, Canada",
+       caption =  str_c(
+         "Created by: Jiaqi Bi for STA303/1002, U of T\n",
+         "Source: Census Profile 98-316-X2016001 via OpenData Toronto\n",
+         date_daily[1,1]))
+```
+
+\newpage
+
+```{r neighbourhood_graphs_2, fig.height=4}
+ggplot(data = nbhoods_final) +
+  geom_sf(aes(fill = rate_per_100000)) +
+  theme_map() +
+  theme(legend.position = "right") +
+  scale_fill_gradient(name = "Cases per 100,000 people", low = "white", high = "darkorange") +
+  labs(title = "COVID_19 cases per 100,000, by neighbourhood in Toronto, Canada", 
+       caption =  str_c(
+         "Created by: Jiaqi Bi for STA303/1002, U of T\n",
+         "Source: Ontario Ministry of Health, Integrated Public Health Information System and CORES \n", 
+         date_daily[1,1]
+       ))
+  
+```
+
+\newpage
+
+```{r neighbourhood_graphs_3, fig.height=4}
+ggplot(data = nbhoods_final) +
+  geom_sf(aes(fill = nbhood_type)) +
+  theme_map() +
+  theme(legend.position = "right") +
+  scale_fill_brewer(palette = "Set1", name = str_c("% of 18 to 64 year-olds\n",
+                                                   "in lowincome families and\n",
+                                                   "COVID_19 case rates")) +
+  labs(title = "COVID-19 cases per 100,000, by neighbourhood in Toronto, Canada", 
+       caption =  str_c(
+      "Created by: Jiaqi Bi for STA303/1002, U of T\n",
+      "Income data source: Census Profile 98-316-X2016001 via OpenData Toronto\n",
+      "COVID data source: Ontario Ministry of Health, Integrated Public\n", 
+      "Health Information System and CORES\n", 
+      date_daily[1,1]
+       ))
+  
+```
+
+
+\newpage
+
+```{r, eval = FALSE}
+# This chunk of code helps you prepare your assessment for submission on Crowdmark
+# This is optional. If it isn't working, you can do it manually/take another approach.
+
+# Run this chunk by hand after knitting your final version of your pdf for submission.
+# A new file called 'to_submit' will appear in your working directory with each page of your assignment as a separate pdf.
+
+# Install the required packages
+if(!match("staplr", installed.packages()[,1], nomatch = FALSE))
+  {install.packages("staplr")}
+
+# Don't edit anything in this function
+prep_for_crowdmark <- function(pdf=NULL){
+  # Get the name of the file you're currently in. 
+  this_file <- rstudioapi::getSourceEditorContext()$path
+  pdf_name <- sub(".Rmd", ".pdf", sub('.*/', '', this_file))
+  
+  # Create a file called to_submit to put the individual files in
+  # This will be in the same folder as this file is saved
+  if(!match("to_submit", list.files(), nomatch = FALSE))
+    {dir.create("to_submit")}
+ 
+  # Split the files
+  if(is.null(pdf)){
+  staplr::split_pdf(pdf_name, output_directory = "to_submit", prefix = "page_")} else {
+    staplr::split_pdf(pdf, output_directory = "to_submit", prefix = "page_") 
+  }
+}
+
+prep_for_crowdmark()
+
+```
