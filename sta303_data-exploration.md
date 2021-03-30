@@ -201,35 +201,3 @@ ggplot(data = nbhoods_final) +
 ```
 
 ![](Figs/neighbourhood_graphs_3-1.png)<!-- -->
-
-``` r
-# This chunk of code helps you prepare your assessment for submission on Crowdmark
-# This is optional. If it isn't working, you can do it manually/take another approach.
-
-# Run this chunk by hand after knitting your final version of your pdf for submission.
-# A new file called 'to_submit' will appear in your working directory with each page of your assignment as a separate pdf.
-
-# Install the required packages
-if(!match("staplr", installed.packages()[,1], nomatch = FALSE))
-  {install.packages("staplr")}
-
-# Don't edit anything in this function
-prep_for_crowdmark <- function(pdf=NULL){
-  # Get the name of the file you're currently in. 
-  this_file <- rstudioapi::getSourceEditorContext()$path
-  pdf_name <- sub(".Rmd", ".pdf", sub('.*/', '', this_file))
-  
-  # Create a file called to_submit to put the individual files in
-  # This will be in the same folder as this file is saved
-  if(!match("to_submit", list.files(), nomatch = FALSE))
-    {dir.create("to_submit")}
- 
-  # Split the files
-  if(is.null(pdf)){
-  staplr::split_pdf(pdf_name, output_directory = "to_submit", prefix = "page_")} else {
-    staplr::split_pdf(pdf, output_directory = "to_submit", prefix = "page_") 
-  }
-}
-
-prep_for_crowdmark()
-```
